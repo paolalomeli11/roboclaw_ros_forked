@@ -1,9 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from math import pi, cos, sin
 
 import diagnostic_msgs
 import diagnostic_updater
-import roboclaw_driver.roboclaw_driver as roboclaw
+from roboclaw_driver.roboclaw_driver import Roboclaw
 import rospy
 import tf
 from geometry_msgs.msg import Quaternion, Twist
@@ -137,6 +137,8 @@ class Node:
                        0x4000: (diagnostic_msgs.msg.DiagnosticStatus.OK, "M1 home"),
                        0x8000: (diagnostic_msgs.msg.DiagnosticStatus.OK, "M2 home")}
 
+        self.robo_claw = Roboclaw(0,0)
+
         rospy.init_node("roboclaw_node")
         rospy.on_shutdown(self.shutdown)
         rospy.loginfo("Connecting to roboclaw")
@@ -148,9 +150,13 @@ class Node:
             rospy.logfatal("Address out of range")
             rospy.signal_shutdown("Address out of range")
 
+        self.robo_claw = Roboclaw(dev_name,baud_rate)
+        
         # TODO need someway to check if address is correct
         try:
-            roboclaw.Open(dev_name, baud_rate)
+            self.robo_claw.Open()
+
+
         except Exception as e:
             rospy.logfatal("Could not connect to Roboclaw")
             rospy.logdebug(e)
@@ -162,7 +168,7 @@ class Node:
                          FunctionDiagnosticTask("Vitals", self.check_vitals))
 
         try:
-            version = roboclaw.ReadVersion(self.address)
+            version = self.robo_claw.ReadVersion(self.address)
         except Exception as e:
             rospy.logwarn("Problem getting roboclaw version")
             rospy.logdebug(e)
@@ -173,8 +179,8 @@ class Node:
         else:
             rospy.logdebug(repr(version[1]))
 
-        roboclaw.SpeedM1M2(self.address, 0, 0)
-        roboclaw.ResetEncoders(self.address)
+        self.robo_claw.SpeedM1M2(self.address, 0, 0)
+        self.robo_claw.ResetEncoders(self.address)
 
         self.MAX_SPEED = float(rospy.get_param("~max_speed", "2.0"))
         self.TICKS_PER_METER = float(rospy.get_param("~tick_per_meter", "4342.2"))
@@ -202,8 +208,9 @@ class Node:
             if (rospy.get_rostime() - self.last_set_speed_time).to_sec() > 1:
                 rospy.loginfo("Did not get command for 1 second, stopping")
                 try:
-                    roboclaw.ForwardM1(self.address, 0)
-                    roboclaw.ForwardM2(self.address, 0)
+                    # self.robo_claw.ForwardM1(self.address, 0)
+                    # self.robo_claw.ForwardM2(self.address, 0)
+                    pass
                 except OSError as e:
                     rospy.logerr("Could not stop")
                     rospy.logdebug(e)
@@ -213,7 +220,7 @@ class Node:
             status2, enc2, crc2 = None, None, None
 
             try:
-                status1, enc1, crc1 = roboclaw.ReadEncM1(self.address)
+                status1, enc1, crc1 = self.robo_claw.ReadEncM1(self.address)
             except ValueError:
                 pass
             except OSError as e:
@@ -221,7 +228,7 @@ class Node:
                 rospy.logdebug(e)
 
             try:
-                status2, enc2, crc2 = roboclaw.ReadEncM2(self.address)
+                status2, enc2, crc2 = self.robo_claw.ReadEncM2(self.address)
             except ValueError:
                 pass
             except OSError as e:
@@ -254,11 +261,11 @@ class Node:
 
         try:
             # This is a hack way to keep a poorly tuned PID from making noise at speed 0
-            if vr_ticks is 0 and vl_ticks is 0:
-                roboclaw.ForwardM1(self.address, 0)
-                roboclaw.ForwardM2(self.address, 0)
+            if vr_ticks == 0 and vl_ticks == 0:
+                self.robo_claw.ForwardM1(self.address, 0)
+                self.robo_claw.ForwardM2(self.address, 0)
             else:
-                roboclaw.SpeedM1M2(self.address, vr_ticks, vl_ticks)
+                self.robo_claw.SpeedM1M2(self.address, vr_ticks, vl_ticks)
         except OSError as e:
             rospy.logwarn("SpeedM1M2 OSError: %d", e.errno)
             rospy.logdebug(e)
@@ -266,7 +273,7 @@ class Node:
     # TODO: Need to make this work when more than one error is raised
     def check_vitals(self, stat):
         try:
-            status = roboclaw.ReadError(self.address)[1]
+            status = self.robo_claw.ReadError(self.address)[1]
         except OSError as e:
             rospy.logwarn("Diagnostics OSError: %d", e.errno)
             rospy.logdebug(e)
@@ -274,10 +281,10 @@ class Node:
         state, message = self.ERRORS[status]
         stat.summary(state, message)
         try:
-            stat.add("Main Batt V:", float(roboclaw.ReadMainBatteryVoltage(self.address)[1] / 10))
-            stat.add("Logic Batt V:", float(roboclaw.ReadLogicBatteryVoltage(self.address)[1] / 10))
-            stat.add("Temp1 C:", float(roboclaw.ReadTemp(self.address)[1] / 10))
-            stat.add("Temp2 C:", float(roboclaw.ReadTemp2(self.address)[1] / 10))
+            stat.add("Main Batt V:", float(self.robo_claw.ReadMainBatteryVoltage(self.address)[1] / 10))
+            stat.add("Logic Batt V:", float(self.robo_claw.ReadLogicBatteryVoltage(self.address)[1] / 10))
+            stat.add("Temp1 C:", float(self.robo_claw.ReadTemp(self.address)[1] / 10))
+            stat.add("Temp2 C:", float(self.robo_claw.ReadTemp2(self.address)[1] / 10))
         except OSError as e:
             rospy.logwarn("Diagnostics OSError: %d", e.errno)
             rospy.logdebug(e)
@@ -287,13 +294,13 @@ class Node:
     def shutdown(self):
         rospy.loginfo("Shutting down")
         try:
-            roboclaw.ForwardM1(self.address, 0)
-            roboclaw.ForwardM2(self.address, 0)
+            self.robo_claw.ForwardM1(self.address, 0)
+            self.robo_claw.ForwardM2(self.address, 0)
         except OSError:
             rospy.logerr("Shutdown did not work trying again")
             try:
-                roboclaw.ForwardM1(self.address, 0)
-                roboclaw.ForwardM2(self.address, 0)
+                self.robo_claw.ForwardM1(self.address, 0)
+                self.robo_claw.ForwardM2(self.address, 0)
             except OSError as e:
                 rospy.logerr("Could not shutdown motors!!!!")
                 rospy.logdebug(e)
